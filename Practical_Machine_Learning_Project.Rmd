@@ -1,0 +1,154 @@
+---
+title: 'Practical Machine Learning: Course Project'
+author: "Paul Byrne"
+date: "12/08/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+## Executive Summary
+The aim of the project is to use the data collected from personal activity monitors such as the 
+Jawbone Up, Nike FuelBand, and Fitbit and specifically data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict the manner in which they conducted the excercise.
+
+The subjects were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+## Data Import and Initialisation
+The training data for this project are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har.
+
+
+``` {r dataimport, cache=TRUE, message=FALSE}
+library(caret)
+library(randomForest)
+library(dplyr)
+
+trainingURL <- url('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv')
+testingURL <- url('https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv' )
+
+training_data <- read.csv(trainingURL)
+testing_data <- read.csv(testingURL)
+```
+
+## Data Cleansing and Selecting Variables
+We next decide which variables to use in the prediction exercise. 
+Initially those vairables which have a high correlation to each other, those with numerous missing entries and variables such as Name and ID which have no predictive value are removed.
+
+### Remove Columnms with Non Zero Variance
+```{r nonzerovariance}
+nonZeroVariance <- caret::nearZeroVar(training_data, allowParallel = TRUE)
+training_data <- training_data[, -nonZeroVariance]
+testing_data <- testing_data[, -nonZeroVariance]
+```
+
+### Remove Columns with over 90% NAs
+``` {r nathreshold}
+na_data <- which(colMeans(!is.na(training_data)) > 0.9)
+training_data <- training_data[, na_data]
+testing_data <- testing_data[, na_data]
+
+dim(training_data)
+dim(testing_data)
+```
+
+### Remove non-numeric Variables
+``` {r nonnumeric}
+training_data <- training_data[, 8:59]
+testing_data <- testing_data[, 8:59]
+
+```
+
+The resulting dataset has 52 variables to be included within the model.
+
+## Model Selection and Approach
+We will now use the training set in order to train and tune our model to predict the classe variable.
+This project will initially split the training set into a training and validation set.
+
+The model selected will be the random forest, using parallel computing to make it more efficient and also then will consider using cross validation to tune the model. The random forest method was used over other methods due to its increased accuracy, howeer, the longer computational time has been considered through the use of parallel processing and cross validation as opposed to bootstrapping.
+
+### Training Data Partition
+The training dataset is split into a training data (60% of observations) and validation dataset (40% of observations). This allows us to test the model on the validation set and predict the expected out of sample error rates.
+
+``` {r partition, message=FALSE}
+library(caret)
+intrain <- createDataPartition(training_data$classe, p=0.6, list=FALSE)
+training_dataset <- training_data[intrain ,]
+validation_dataset <- training_data[-intrain ,]
+```
+
+## Running and Tuning the Model
+Initially we are going to setup the ability to use parallel computing to make the running of the random forest model more efficient.
+
+Note the approach was taken from Leonard Greski's article which can be found here:
+https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md
+
+``` {r parallel, message=FALSE}
+library(parallel)
+library(doParallel)
+
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+```
+Setting up the Random Forest with 5 Fold Cross Validation. This was chosen versus the default bootstrapping method as it significantly reduced the running time of the model.
+
+Given the model was deemend to be efficient enough, no pre-processing such as PCA has been implemented.
+
+```{r randomforest}
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+fit <- train( classe~. , method="rf",data=training_dataset,trControl = fitControl)
+
+stopCluster(cluster)
+registerDoSEQ()
+```
+
+### Model Output
+The below shows the output and accuracy of the final fitted model on the training data set.
+``` {r model}
+fit
+confusionMatrix.train(fit)
+```
+
+The model using random forest on the training set has an accuracy of 98.9%, meaning the in sample error is 1.1%
+
+### Validation Set
+Next we use the model to predict on the validation set to test the out of sample accuracy of the model.
+
+``` {r validation}
+
+rf_prediction <- predict(fit, validation_dataset)
+confusionMatrix(rf_prediction, validation_dataset$classe)
+        
+```
+
+Accuracy of the model using the validation dataset was 99.1%, therefore the out of sample error is 0.9%.
+
+### Variable Importance
+Next we consider the vairable importance. We can see from the below plot that the yaw_belt and pitch_forarm and the two most important variables in determining the type of exercise being undertaken from the model.
+
+``` {r varimp}
+plot(varImp(fit), top = 20)
+```
+
+### Predicting on the Test Set
+The model constructed above has then been use to predict using the 20 observations in the testing set.
+This code and the results have been hidden for the final course project.
+
+``` {r prediction, echo = FALSE}
+
+test_results <- predict(fit, testing_data)
+test_results_final <- cbind(testing_data$problem_id,   data.frame(test_results))
+
+```
+
+## Conclusion
+We have constructed a random forest model, using 5 fold cross validation to predict the type of exercise completed, given the 51 variables given in the dataset as measured by the fitness trackers.
+
+The in sample and out of sample errors were both c.99% using the training and validation datasets.
+When viewing the variable importance it is apparent that the Yaw Belt and Forearm Pitch were the most important in determining the type of activity.
+
+
